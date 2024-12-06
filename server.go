@@ -78,22 +78,23 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 }
 
-func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 
 	if result, keyExists := kv.requests[args.ClientId]; keyExists {
 		if args.RequestNum <= result.RequestNum {
 			reply.Err = OK
+			kv.mu.Unlock()
 			return
 		}
 	}
+
+	kv.mu.Unlock()
 
 	op := Op{
 		Type:       args.Op,
@@ -104,36 +105,6 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	reply.Err = kv.applyOp(op)
-
-}
-
-func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	if _, isLeader := kv.rf.GetState(); !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
-	if result, keyExists := kv.requests[args.ClientId]; keyExists {
-		if args.RequestNum <= result.RequestNum {
-			reply.Err = OK
-			return
-		}
-	}
-
-	op := Op{
-		Type:       args.Op,
-		Key:        args.Key,
-		Value:      args.Value,
-		ClientId:   args.ClientId,
-		RequestNum: args.RequestNum,
-	}
-
-	reply.Err = kv.applyOp(op)
-
 }
 
 //APPLYOP NEW FUNC
@@ -165,9 +136,7 @@ func (kv *KVServer) applyOp(op Op) Err {
 	return OK
 }
 
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
+//code to set rf.dead (without needing a lock),
 // and a killed() method to test rf.dead in
 // long-running loops. you can also add your own
 // code to Kill(). you're not required to do anything
@@ -214,33 +183,60 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	return kv
 }
 
-func (kv *KVServer) handleAppliedOps() {
-	const SleepInterval = 1 * time.Millisecond
+//func (kv *KVServer) handleAppliedOps() {
+//
+//	const SleepInterval = time.Nanosecond * 1
+//
+//	for !kv.killed() {
+//		applyChMsg := <-kv.applyCh
+//
+//		kv.mu.Lock()
+//
+//		if applyChMsg.CommandValid {
+//			appliedOp := applyChMsg.Command.(Op)
+//
+//			result, exists := kv.requests[appliedOp.ClientId]
+//			if !exists || (exists && result.RequestNum < appliedOp.RequestNum) {
+//				kv.requests[appliedOp.ClientId] = RequestResult{
+//					RequestNum: appliedOp.RequestNum,
+//					Value:      kv.dbMap[appliedOp.Key],
+//				}
+//
+//				if appliedOp.Type == "Put" {
+//					kv.dbMap[appliedOp.Key] = appliedOp.Value
+//				} else if appliedOp.Type == "Append" {
+//					kv.dbMap[appliedOp.Key] += appliedOp.Value
+//				}
+//			}
+//		}
+//
+//		kv.mu.Unlock()
+//		time.Sleep(SleepInterval)
+//	}
+//}
 
+func (kv *KVServer) handleAppliedOps() {
 	for !kv.killed() {
 		applyChMsg := <-kv.applyCh
 
 		kv.mu.Lock()
-
 		if applyChMsg.CommandValid {
 			appliedOp := applyChMsg.Command.(Op)
 
 			result, exists := kv.requests[appliedOp.ClientId]
-			if !exists || (exists && result.RequestNum < appliedOp.RequestNum) {
-				kv.requests[appliedOp.ClientId] = RequestResult{
-					RequestNum: appliedOp.RequestNum,
-					Value:      kv.dbMap[appliedOp.Key],
-				}
-
+			if !exists || result.RequestNum < appliedOp.RequestNum {
 				if appliedOp.Type == "Put" {
 					kv.dbMap[appliedOp.Key] = appliedOp.Value
 				} else if appliedOp.Type == "Append" {
 					kv.dbMap[appliedOp.Key] += appliedOp.Value
 				}
+
+				kv.requests[appliedOp.ClientId] = RequestResult{
+					RequestNum: appliedOp.RequestNum,
+					Value:      kv.dbMap[appliedOp.Key],
+				}
 			}
 		}
-
 		kv.mu.Unlock()
-		time.Sleep(SleepInterval)
 	}
 }
